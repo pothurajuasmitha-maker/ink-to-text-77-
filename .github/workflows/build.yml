@@ -1,0 +1,272 @@
+name: Build All-in-One OCR APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.19.x'
+          channel: 'stable'
+
+      - name: Create Complete Project Files
+        run: |
+          mkdir -p lib
+          
+          # pubspec.yaml సృష్టిస్తున్నాం
+          cat << 'EOF' > pubspec.yaml
+          name: ocr_math_app
+          description: Advanced OCR Speech and Formula Recognition App
+          publish_to: 'none'
+          version: 1.0.0+1
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            google_mlkit_text_recognition: ^0.13.0
+            image_picker: ^1.1.2
+            speech_to_text: ^7.0.0
+            flutter_math_fork: ^0.7.2
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^3.0.0
+
+          flutter:
+            uses-material-design: true
+          EOF
+
+          # main.dart సృష్టిస్తున్నాం
+          cat << 'EOF' > lib/main.dart
+          import 'dart:io';
+          import 'package:flutter/material.dart';
+          import 'package:image_picker/image_picker.dart';
+          import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+          import 'package:speech_to_text/speech_to_text.dart' as stt;
+          import 'package:flutter_math_fork/flutter_math.dart';
+
+          void main() {
+            runApp(const MyApp());
+          }
+
+          class MyApp extends StatelessWidget {
+            const MyApp({super.key});
+
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'OCR & Formula Scanner',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(primarySwatch: Colors.indigo, useMaterial3: true),
+                home: const HomeScreen(),
+              );
+            }
+          }
+
+          class HomeScreen extends StatefulWidget {
+            const HomeScreen({super.key});
+
+            @override
+            State<HomeScreen> createState() => _HomeScreenState();
+          }
+
+          class _HomeScreenState extends State<HomeScreen> {
+            File? _userPhoto;
+            File? _scannedImage;
+            String _extractedText = "";
+            bool _isScanning = false;
+            late stt.SpeechToText _speech;
+            bool _isListening = false;
+            String _spokenText = "";
+            final ImagePicker _picker = ImagePicker();
+
+            @override
+            void initState() {
+              super.initState();
+              _speech = stt.SpeechToText();
+            }
+
+            Future<void> _pickUserPhoto() async {
+              final XFile? image = await _picker.pickImage(source: ImageSource.gallery);
+              if (image != null) setState(() => _userPhoto = File(image.path));
+            }
+
+            Future<void> _processImage(ImageSource source) async {
+              final XFile? image = await _picker.pickImage(source: source);
+              if (image == null) return;
+
+              setState(() {
+                _scannedImage = File(image.path);
+                _isScanning = true;
+              });
+
+              final inputImage = InputImage.fromFilePath(image.path);
+              final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
+
+              try {
+                final RecognizedText recognizedText = await textRecognizer.processImage(inputImage);
+                setState(() => _extractedText = _formatMathAndChemistry(recognizedText.text));
+              } catch (e) {
+                setState(() => _extractedText = "Error scanning image: $e");
+              } finally {
+                textRecognizer.close();
+                setState(() => _isScanning = false);
+              }
+            }
+
+            String _formatMathAndChemistry(String rawText) {
+              String formatted = rawText;
+              formatted = formatted.replaceAll(RegExp(r'H2O'), r'H_2O');
+              formatted = formatted.replaceAll(RegExp(r'CO2'), r'CO_2');
+              formatted = formatted.replaceAll(RegExp(r'x2'), r'x^2');
+              formatted = formatted.replaceAll(RegExp(r'y2'), r'y^2');
+              return formatted;
+            }
+
+            Future<void> _listenSpeech() async {
+              if (!_isListening) {
+                bool available = await _speech.initialize();
+                if (available) {
+                  setState(() => _isListening = true);
+                  _speech.listen(localeId: "en_US", onResult: (val) {
+                    setState(() => _spokenText = val.recognizedWords);
+                  });
+                }
+              } else {
+                setState(() => _isListening = false);
+                _speech.stop();
+              }
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text("Smart OCR & Formula Scanner"),
+                  backgroundColor: Colors.indigo,
+                  foregroundColor: Colors.white,
+                  actions: [
+                    Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: GestureDetector(
+                        onTap: _pickUserPhoto,
+                        child: CircleAvatar(
+                          radius: 20,
+                          backgroundColor: Colors.white24,
+                          backgroundImage: _userPhoto != null ? FileImage(_userPhoto!) : null,
+                          child: _userPhoto == null ? const Icon(Icons.person, color: Colors.white) : null,
+                        ),
+                      ),
+                    )
+                  ],
+                ),
+                body: SingleChildScrollView(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          ElevatedButton.icon(
+                            onPressed: () => _processImage(ImageSource.camera),
+                            icon: const Icon(Icons.camera_alt),
+                            label: const Text("కెమెరా"),
+                          ),
+                          ElevatedButton.icon(
+                            onPressed: () => _processImage(ImageSource.gallery),
+                            icon: const Icon(Icons.photo_library),
+                            label: const Text("గ్యాలరీ"),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 15),
+                      Card(
+                        color: Colors.indigo.shade50,
+                        child: ListTile(
+                          leading: IconButton(
+                            icon: Icon(_isListening ? Icons.mic : Icons.mic_none, color: Colors.indigo),
+                            onPressed: _listenSpeech,
+                          ),
+                          title: const Text("English Speech to Text"),
+                          subtitle: Text(_spokenText.isEmpty ? "మాట్లాడటానికి మైక్ క్లిక్ చేయండి..." : _spokenText),
+                        ),
+                      ),
+                      const SizedBox(height: 15),
+                      if (_scannedImage != null)
+                        Container(
+                          height: 200,
+                          decoration: BoxDecoration(border: Border.all(color: Colors.grey)),
+                          child: Image.file(_scannedImage!, fit: BoxFit.cover),
+                        ),
+                      const SizedBox(height: 15),
+                      const Text("గుర్తించిన టెక్స్ట్ / సమీకరణాలు:", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      const SizedBox(height: 8),
+                      _isScanning
+                          ? const Center(child: CircularProgressIndicator())
+                          : Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: Colors.grey.shade100,
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.grey.shade300),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SelectableText(
+                                    _extractedText.isEmpty ? "ఇక్కడ ఫలితం కనిపిస్తుంది..." : _extractedText,
+                                    style: const TextStyle(fontSize: 16),
+                                  ),
+                                  const Divider(),
+                                  if (_extractedText.isNotEmpty) ...[
+                                    const Text("Rendered Math / Science Output:", style: TextStyle(color: Colors.grey)),
+                                    const SizedBox(height: 5),
+                                    Math.tex(
+                                      _extractedText,
+                                      textStyle: const TextStyle(fontSize: 18),
+                                      onErrorFallback: (err) => Text(_extractedText),
+                                    ),
+                                  ]
+                                ],
+                              ),
+                            ),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
+
+      - name: Get Dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release --no-tree-shake-icons
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ocr-app-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
